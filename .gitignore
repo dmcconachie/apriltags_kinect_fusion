@@ -1,0 +1,5 @@
+*.swp
+*autosave
+*~
+tags
+*.pyc
