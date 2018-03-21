@@ -17,6 +17,7 @@
 #include <pcl/visualization/pcl_visualizer.h>
 
 #include <arc_utilities/ros_helpers.hpp>
+#include <arc_utilities/timing.hpp>
 #include <arc_utilities/eigen_helpers_conversions.hpp>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
@@ -115,10 +116,6 @@ public:
 //        cv::namedWindow("Display window", cv::WINDOW_AUTOSIZE);// Create a window for display
 //        cv::namedWindow("Test window", cv::WINDOW_AUTOSIZE);// Create a window for display
 
-        detections_cloud_publishers_[0] = nh_.advertise<PointCloud<PointXYZRGB>>("detections_as_clouds_0", 1);
-        detections_cloud_publishers_[2] = nh_.advertise<PointCloud<PointXYZRGB>>("detections_as_clouds_2", 1);
-        detections_cloud_publishers_[4] = nh_.advertise<PointCloud<PointXYZRGB>>("detections_as_clouds_4", 1);
-
         marker_publisher_ = nh_.advertise<visualization_msgs::MarkerArray>(
                     ROSHelpers::GetParamDebugLog<std::string>(ph_, "marker_topic", DEFAULT_MARKER_TOPIC), 1);
 
@@ -180,6 +177,8 @@ private:
 
     void syncCallback(const sensor_msgs::ImageConstPtr& ros_image, const PointCloud<PointXYZRGB>::ConstPtr& cloud)
     {
+        auto function_wide_stopwatch = arc_utilities::Stopwatch();
+
         if (!has_camera_info_.load())
         {
             ROS_WARN("No Camera Info Received Yet");
@@ -215,6 +214,8 @@ private:
         TagDetectionArray detections;
         tag_detector_->process(cv_image_gray, opticalCenter, detections);
 
+        std::cerr << "post tag detection:           " << function_wide_stopwatch(arc_utilities::READ) << " seconds" << std::endl;
+
         // Build the visualization message
         visualization_msgs::MarkerArray marker_transforms;
         apriltags_kinect_fusion::AprilTagDetections apriltag_detections;
@@ -231,9 +232,13 @@ private:
 
             const TagDetection &det = detections[i];
 
+            auto stopwatch = arc_utilities::Stopwatch();
+
             const auto pose_and_size = getTagTransformAndSize(det, cloud);
             const auto pose = pose_and_size.first;
             const auto tag_size = pose_and_size.second;
+
+            std::cerr << "post tag pose/size:       " << stopwatch(arc_utilities::READ) << " seconds" << std::endl;
 
             // Fill in the visualization marker
             visualization_msgs::Marker marker;
@@ -278,6 +283,9 @@ private:
         }
 
 
+        std::cerr << "sync callback total time:     " << function_wide_stopwatch(arc_utilities::READ) << " seconds" << std::endl << std::endl;
+
+
         marker_publisher_.publish(marker_transforms);
         detections_publisher_.publish(apriltag_detections);
     }
@@ -292,6 +300,12 @@ private:
 
         // Extract the points correspinding to the mask from the point cloud
         const PointCloud<PointXYZRGB>::ConstPtr tag_xyzrgb = extractPoints(cloud, valid_region_mask);
+
+        // Publish the data as a point cloud
+        if (detections_cloud_publishers_.find(tag.id) == detections_cloud_publishers_.end())
+        {
+            detections_cloud_publishers_[tag.id] = nh_.advertise<PointCloud<PointXYZRGB>>("detections_as_clouds_" + std::to_string(tag.id), 1);
+        }
         detections_cloud_publishers_.at(tag.id).publish(tag_xyzrgb);
 
         // Convert to just XYZ data
